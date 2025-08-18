@@ -1,0 +1,569 @@
+generator client {
+  provider = "prisma-client-js"
+  enableTracing = false
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(uuid())
+  phoneNumber String   @unique
+  email       String?  @unique
+  isVerified  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Profile Information
+  profile Profile?
+
+  // Authentication
+  otpCodes OtpCode[]
+
+  // Matching & Discovery
+  sentLikes     Like[] @relation("LikeSender")
+  receivedLikes Like[] @relation("LikeReceiver")
+  sentPasses    Pass[] @relation("PassSender") 
+  receivedPasses Pass[] @relation("PassReceiver")
+  matches       Match[] @relation("MatchUser1")
+  matchedWith   Match[] @relation("MatchUser2")
+
+  // Messaging
+  sentMessages     Message[] @relation("MessageSender")
+  receivedMessages Message[] @relation("MessageReceiver")
+  conversations1   Conversation[] @relation("ConversationUser1")
+  conversations2   Conversation[] @relation("ConversationUser2")
+
+  // Blocks & Reports
+  sentBlocks     Block[] @relation("BlockSender")
+  receivedBlocks Block[] @relation("BlockReceiver")
+  sentReports    Report[] @relation("ReportSender")
+  receivedReports Report[] @relation("ReportReceiver")
+
+  // Premium & Subscriptions
+  subscription Subscription?
+  payments     Payment[]
+  boosts       Boost[]
+  superLikes   SuperLike[]
+
+  // Notifications
+  notifications Notification[]
+  pushTokens    PushToken[]
+
+  // Settings
+  settings UserSettings?
+
+  // Activity tracking
+  activities UserActivity[]
+  
+  @@map("users")
+}
+
+model Profile {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Basic Information
+  firstName   String
+  lastName    String?
+  dateOfBirth DateTime?
+  gender      Gender?
+  bio         String?
+  occupation  String?
+  company     String?
+  education   String?
+  height      Int?     // in cm
+  
+  // Location
+  latitude    Float?
+  longitude   Float?
+  city        String?
+  state       String?
+  country     String?
+  
+  // Photos
+  photos      Photo[]
+  
+  // Interests & Preferences
+  interests   Interest[]
+  preferences MatchPreference?
+  
+  // Questions & Answers
+  answers     QuestionAnswer[]
+  
+  // Verification
+  isVerified  Boolean  @default(false)
+  
+  // Discovery Settings
+  isDiscoverable Boolean @default(true)
+  showOnlineStatus Boolean @default(false)
+  
+  // Profile completion
+  profileCompleteness Int @default(0)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("profiles")
+}
+
+model Photo {
+  id        String   @id @default(uuid())
+  profileId String
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  
+  url       String
+  publicId  String   // Cloudinary public ID
+  isPrimary Boolean  @default(false)
+  order     Int      @default(0)
+  
+  createdAt DateTime @default(now())
+  
+  @@map("photos")
+}
+
+model Interest {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  category  String?
+  profiles  Profile[]
+  
+  createdAt DateTime  @default(now())
+  
+  @@map("interests")
+}
+
+model MatchPreference {
+  id        String  @id @default(uuid())
+  profileId String  @unique
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  
+  minAge    Int     @default(18)
+  maxAge    Int     @default(100)
+  maxDistance Int   @default(100) // in km
+  genderPreference GenderPreference @default(ALL)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("match_preferences")
+}
+
+model Question {
+  id          String   @id @default(uuid())
+  text        String
+  category    String?
+  options     Json?    // For multiple choice questions
+  type        QuestionType @default(TEXT)
+  isRequired  Boolean  @default(false)
+  order       Int
+  
+  answers     QuestionAnswer[]
+  
+  createdAt   DateTime @default(now())
+  
+  @@map("questions")
+}
+
+model QuestionAnswer {
+  id         String   @id @default(uuid())
+  profileId  String
+  profile    Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id])
+  
+  answer     String
+  
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  @@unique([profileId, questionId])
+  @@map("question_answers")
+}
+
+model OtpCode {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  code      String
+  purpose   OtpPurpose
+  expiresAt DateTime
+  isUsed    Boolean  @default(false)
+  
+  createdAt DateTime @default(now())
+  
+  @@map("otp_codes")
+}
+
+model Like {
+  id         String   @id @default(uuid())
+  senderId   String
+  sender     User     @relation("LikeSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User     @relation("LikeReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  
+  createdAt  DateTime @default(now())
+  
+  @@unique([senderId, receiverId])
+  @@map("likes")
+}
+
+model SuperLike {
+  id         String   @id @default(uuid())
+  senderId   String
+  sender     User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  
+  createdAt  DateTime @default(now())
+  
+  @@unique([senderId, receiverId])
+  @@map("super_likes")
+}
+
+model Pass {
+  id         String   @id @default(uuid())
+  senderId   String
+  sender     User     @relation("PassSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User     @relation("PassReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  
+  createdAt  DateTime @default(now())
+  
+  @@unique([senderId, receiverId])
+  @@map("passes")
+}
+
+model Match {
+  id     String @id @default(uuid())
+  user1Id String
+  user1   User   @relation("MatchUser1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2Id String
+  user2   User   @relation("MatchUser2", fields: [user2Id], references: [id], onDelete: Cascade)
+  
+  conversation Conversation?
+  
+  createdAt DateTime @default(now())
+  
+  @@unique([user1Id, user2Id])
+  @@map("matches")
+}
+
+model Conversation {
+  id      String @id @default(uuid())
+  matchId String @unique
+  match   Match  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  
+  user1Id String
+  user1   User   @relation("ConversationUser1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2Id String
+  user2   User   @relation("ConversationUser2", fields: [user2Id], references: [id], onDelete: Cascade)
+  
+  messages Message[]
+  
+  lastMessageAt DateTime?
+  user1LastRead DateTime?
+  user2LastRead DateTime?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  
+  senderId   String
+  sender     User   @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User   @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  
+  content     String?
+  messageType MessageType @default(TEXT)
+  mediaUrl    String?
+  mediaType   String?
+  
+  isRead      Boolean   @default(false)
+  readAt      DateTime?
+  editedAt    DateTime?
+  
+  createdAt   DateTime  @default(now())
+  
+  @@map("messages")
+}
+
+model Block {
+  id         String   @id @default(uuid())
+  senderId   String
+  sender     User     @relation("BlockSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User     @relation("BlockReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  
+  reason     String?
+  
+  createdAt  DateTime @default(now())
+  
+  @@unique([senderId, receiverId])
+  @@map("blocks")
+}
+
+model Report {
+  id         String     @id @default(uuid())
+  senderId   String
+  sender     User       @relation("ReportSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User       @relation("ReportReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  
+  reason     ReportReason
+  description String?
+  status     ReportStatus @default(PENDING)
+  
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  
+  @@map("reports")
+}
+
+model Subscription {
+  id     String           @id @default(uuid())
+  userId String           @unique
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  plan   SubscriptionPlan
+  status SubscriptionStatus @default(ACTIVE)
+  
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  
+  startDate  DateTime
+  endDate    DateTime
+  canceledAt DateTime?
+  
+  features   Json // JSON object with enabled features
+  
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  @@map("subscriptions")
+}
+
+model Payment {
+  id     String        @id @default(uuid())
+  userId String
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  amount   Float
+  currency String       @default("USD")
+  purpose  PaymentPurpose
+  
+  stripePaymentIntentId String?
+  status PaymentStatus @default(PENDING)
+  
+  metadata Json?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("payments")
+}
+
+model Boost {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type      BoostType
+  duration  Int       // in minutes
+  startedAt DateTime
+  endsAt    DateTime
+  
+  createdAt DateTime  @default(now())
+  
+  @@map("boosts")
+}
+
+model Notification {
+  id     String           @id @default(uuid())
+  userId String
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type    NotificationType
+  title   String
+  message String
+  data    Json?
+  
+  isRead  Boolean @default(false)
+  readAt  DateTime?
+  
+  createdAt DateTime @default(now())
+  
+  @@map("notifications")
+}
+
+model PushToken {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  token    String @unique
+  platform String // ios, android, web
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("push_tokens")
+}
+
+model UserSettings {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Notification preferences
+  emailNotifications      Boolean @default(true)
+  pushNotifications       Boolean @default(true)
+  newMatchNotifications   Boolean @default(true)
+  messageNotifications    Boolean @default(true)
+  likeNotifications       Boolean @default(true)
+  superLikeNotifications  Boolean @default(true)
+  
+  // Privacy settings
+  showAge            Boolean @default(true)
+  showDistance       Boolean @default(true)
+  showOnlineStatus   Boolean @default(false)
+  hideFromContacts   Boolean @default(false)
+  
+  // Discovery settings
+  discoveryEnabled   Boolean @default(true)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("user_settings")
+}
+
+model UserActivity {
+  id     String       @id @default(uuid())
+  userId String
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type   ActivityType
+  data   Json?
+  
+  createdAt DateTime @default(now())
+  
+  @@map("user_activities")
+}
+
+// Enums
+enum Gender {
+  MALE
+  FEMALE
+  NON_BINARY
+  OTHER
+}
+
+enum GenderPreference {
+  MALE
+  FEMALE
+  ALL
+}
+
+enum QuestionType {
+  TEXT
+  MULTIPLE_CHOICE
+  SINGLE_CHOICE
+  SCALE
+  BOOLEAN
+}
+
+enum OtpPurpose {
+  PHONE_VERIFICATION
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  LOCATION
+  GIF
+}
+
+enum ReportReason {
+  INAPPROPRIATE_BEHAVIOR
+  FAKE_PROFILE
+  HARASSMENT
+  SPAM
+  UNDERAGE
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  INVESTIGATING
+  RESOLVED
+  DISMISSED
+}
+
+enum SubscriptionPlan {
+  FREE
+  PREMIUM
+  GOLD
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  EXPIRED
+  PAUSED
+}
+
+enum PaymentPurpose {
+  SUBSCRIPTION
+  BOOST
+  SUPER_LIKES
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum BoostType {
+  PROFILE_BOOST
+  LOCATION_BOOST
+}
+
+enum NotificationType {
+  NEW_MATCH
+  NEW_MESSAGE
+  NEW_LIKE
+  SUPER_LIKE
+  PROFILE_VIEW
+  SYSTEM
+}
+
+enum ActivityType {
+  LOGIN
+  LOGOUT
+  PROFILE_UPDATE
+  PHOTO_UPLOAD
+  MATCH_CREATED
+  MESSAGE_SENT
+  LIKE_SENT
+  SUPER_LIKE_SENT
+  BLOCK_USER
+  REPORT_USER
+  PROFILE_VIEW
+}
