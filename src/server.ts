@@ -45,17 +45,7 @@ export const prisma = new PrismaClient({
       url: process.env.DATABASE_URL
     }
   },
-  log: ['warn', 'error'],
-  __internal: {
-    engine: {
-      connectTimeout: 60000, // 60 seconds
-      pool: {
-        max: 10, // Maximum number of connections in pool
-        timeout: 30000, // 30 seconds timeout for getting connection
-        idleTimeout: 30000, // 30 seconds idle timeout
-      }
-    }
-  }
+  log: ['warn', 'error']
 });
 
 // Rate limiting

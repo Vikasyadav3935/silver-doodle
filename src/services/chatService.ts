@@ -64,34 +64,46 @@ export class ChatService {
         take: limit
       });
 
-      const formattedConversations = conversations.map(conversation => {
-        const otherUser = conversation.user1Id === userId ? conversation.user2 : conversation.user1;
-        const lastMessage = conversation.messages[0];
-        
-        // Calculate unread count
-        const lastReadTime = conversation.user1Id === userId 
-          ? conversation.user1LastRead 
-          : conversation.user2LastRead;
+      const formattedConversations = await Promise.all(
+        conversations.map(async (conversation) => {
+          const otherUser = conversation.user1Id === userId ? conversation.user2 : conversation.user1;
+          const lastMessage = conversation.messages[0];
+          
+          // Calculate unread count
+          const lastReadTime = conversation.user1Id === userId 
+            ? conversation.user1LastRead 
+            : conversation.user2LastRead;
 
-        return {
-          id: conversation.id,
-          otherUser: {
-            id: otherUser.id,
-            profile: otherUser.profile
-          },
-          lastMessage: lastMessage ? {
-            id: lastMessage.id,
-            content: lastMessage.content,
-            messageType: lastMessage.messageType,
-            createdAt: lastMessage.createdAt,
-            senderId: lastMessage.senderId,
-            isOwn: lastMessage.senderId === userId
-          } : null,
-          lastMessageAt: conversation.lastMessageAt,
-          isRead: lastReadTime ? lastMessage?.createdAt <= lastReadTime : false,
-          createdAt: conversation.createdAt
-        };
-      });
+          // Calculate unread count for this conversation
+          const unreadCount = await prisma.message.count({
+            where: {
+              conversationId: conversation.id,
+              receiverId: userId,
+              isRead: false
+            }
+          });
+
+          return {
+            id: conversation.id,
+            otherUser: {
+              id: otherUser.id,
+              profile: otherUser.profile
+            },
+            lastMessage: lastMessage ? {
+              id: lastMessage.id,
+              content: lastMessage.content,
+              messageType: lastMessage.messageType,
+              createdAt: lastMessage.createdAt,
+              senderId: lastMessage.senderId,
+              isOwn: lastMessage.senderId === userId
+            } : null,
+            lastMessageAt: conversation.lastMessageAt,
+            isRead: lastReadTime ? lastMessage?.createdAt <= lastReadTime : false,
+            unreadCount: unreadCount,
+            createdAt: conversation.createdAt
+          };
+        })
+      );
 
       return {
         success: true,
@@ -220,9 +232,9 @@ export class ChatService {
         senderId: message.senderId,
         receiverId: message.receiverId,
         isRead: message.isRead,
-        readAt: message.readAt,
-        createdAt: message.createdAt,
-        editedAt: message.editedAt,
+        readAt: message.readAt ? message.readAt.toISOString() : null,
+        createdAt: message.createdAt.toISOString(),
+        editedAt: message.editedAt ? message.editedAt.toISOString() : null,
         sender: {
           id: message.sender.id,
           firstName: message.sender.profile?.firstName,
@@ -353,8 +365,8 @@ export class ChatService {
         senderId: message.senderId,
         receiverId: message.receiverId,
         isRead: message.isRead,
-        readAt: message.readAt,
-        createdAt: message.createdAt,
+        readAt: message.readAt ? message.readAt.toISOString() : null,
+        createdAt: message.createdAt.toISOString(),
         sender: {
           id: message.sender.id,
           firstName: message.sender.profile?.firstName,

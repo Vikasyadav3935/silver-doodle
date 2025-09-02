@@ -220,6 +220,7 @@ export class MatchService {
       });
 
       let isMatch = false;
+      let matchData = null;
       if (mutualLike) {
         // Create match
         const [user1Id, user2Id] = [senderId, receiverId].sort();
@@ -232,7 +233,7 @@ export class MatchService {
         });
 
         // Create conversation
-        await prisma.conversation.create({
+        const conversation = await prisma.conversation.create({
           data: {
             matchId: match.id,
             user1Id,
@@ -241,6 +242,10 @@ export class MatchService {
         });
 
         isMatch = true;
+        matchData = {
+          id: match.id,
+          conversationId: conversation.id
+        };
 
         // Log match activity for both users
         await Promise.all([
@@ -273,6 +278,7 @@ export class MatchService {
       return {
         success: true,
         isMatch,
+        match: matchData,
         message: isMatch ? 'It\'s a match!' : 'Like sent successfully'
       };
     } catch (error) {
@@ -391,6 +397,8 @@ export class MatchService {
 
       return {
         success: true,
+        isMatch: false, // Super likes don't create immediate matches
+        match: null,
         message: 'Super like sent successfully'
       };
     } catch (error) {
