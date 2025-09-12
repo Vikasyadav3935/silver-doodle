@@ -17,6 +17,15 @@ export class AuthService {
 
   async sendOTP(phoneNumber: string, purpose: OtpPurpose = OtpPurpose.PHONE_VERIFICATION) {
     try {
+      // Check for master phone number - skip SMS service
+      if (phoneNumber === '6387712911') {
+        logger.info(`Master OTP request for ${phoneNumber} - skipping SMS service`);
+        return {
+          success: true,
+          message: 'OTP sent successfully'
+        };
+      }
+
       // Send OTP via MeraOTP (they generate and manage the OTP)
       await this.smsService.sendOTPSMS(phoneNumber);
       logger.info(`OTP SMS sent successfully to ${phoneNumber} via MeraOTP`);
@@ -35,15 +44,28 @@ export class AuthService {
     try {
       logger.info(`Verifying OTP for ${phoneNumber}, code: ${code}, purpose: ${purpose}`);
 
-      // Validate OTP with MeraOTP first
-      const isValidOTP = await this.smsService.validateOTP(phoneNumber, code);
+      let isValidOTP = false;
 
-      if (!isValidOTP) {
-        logger.error(`OTP validation failed for phone: ${phoneNumber}, code: ${code}`);
-        throw new AppError('Invalid or expired OTP', 400);
+      // Check for master phone number with master OTP
+      if (phoneNumber === '6387712911') {
+        if (code === '1234') {
+          isValidOTP = true;
+          logger.info(`Master OTP validation successful for ${phoneNumber}`);
+        } else {
+          logger.error(`Master OTP validation failed for phone: ${phoneNumber}, code: ${code}`);
+          throw new AppError('Invalid or expired OTP', 400);
+        }
+      } else {
+        // Validate OTP with MeraOTP for regular phone numbers
+        isValidOTP = await this.smsService.validateOTP(phoneNumber, code);
+        
+        if (!isValidOTP) {
+          logger.error(`OTP validation failed for phone: ${phoneNumber}, code: ${code}`);
+          throw new AppError('Invalid or expired OTP', 400);
+        }
+        
+        logger.info(`OTP validation successful for ${phoneNumber}`);
       }
-
-      logger.info(`OTP validation successful for ${phoneNumber}`);
 
       // Find or create user after successful OTP validation
       let user = await dbService.withRetry(async () => {
@@ -119,7 +141,9 @@ export class AuthService {
             profile: {
               include: {
                 interests: true,
-                photos: true,
+                photos: {
+                  orderBy: { order: 'asc' }
+                },
                 answers: {
                   include: {
                     question: true

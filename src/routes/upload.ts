@@ -23,6 +23,19 @@ const validateRequest = (req: Request, res: Response, next: NextFunction) => {
 
 // Upload profile photo
 router.post('/profile-photo',
+  // Add request logging middleware
+  (req: Request, res: Response, next: NextFunction) => {
+    console.log('🔥 BACKEND: Upload request received');
+    console.log('🔥 BACKEND: Method:', req.method);
+    console.log('🔥 BACKEND: URL:', req.url);
+    console.log('🔥 BACKEND: Headers:', {
+      'content-type': req.headers['content-type'],
+      'authorization': req.headers.authorization ? 'Bearer [PRESENT]' : 'MISSING',
+      'content-length': req.headers['content-length']
+    });
+    console.log('🔥 BACKEND: Body keys:', Object.keys(req.body || {}));
+    next();
+  },
   authenticate,
   requireVerified,
   upload.single('photo'),
@@ -34,16 +47,31 @@ router.post('/profile-photo',
   ],
   validateRequest,
   async (req: AuthRequest, res: Response, next: NextFunction) => {
+    console.log('🔥 BACKEND: Reached main upload handler');
+    console.log('🔥 BACKEND: User ID:', req.user?.id);
+    console.log('🔥 BACKEND: File present:', !!req.file);
+    console.log('🔥 BACKEND: File details:', req.file ? {
+      fieldname: req.file.fieldname,
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    } : 'No file');
+    console.log('🔥 BACKEND: Request body:', req.body);
+    
     try {
       if (!req.user?.id) {
+        console.log('🔥 BACKEND: ERROR - User not found');
         throw new AppError('User not found', 404);
       }
 
       if (!req.file) {
+        console.log('🔥 BACKEND: ERROR - Photo file is required');
         throw new AppError('Photo file is required', 400);
       }
 
       const isPrimary = req.body.isPrimary === 'true' || req.body.isPrimary === true;
+      
+      console.log('🔥 BACKEND: Calling upload service with isPrimary:', isPrimary);
       
       const result = await uploadService.uploadProfilePhoto(
         req.user.id,
@@ -51,8 +79,15 @@ router.post('/profile-photo',
         isPrimary
       );
 
+      console.log('🔥 BACKEND: Upload service result:', {
+        success: result.success,
+        hasData: !!result.photo,
+        error: result.message
+      });
+
       res.status(201).json(result);
     } catch (error) {
+      console.log('🔥 BACKEND: ERROR in upload handler:', error);
       next(error);
     }
   }
@@ -154,7 +189,8 @@ router.post('/chat-media',
         throw new AppError('Media file is required', 400);
       }
 
-      const result = await uploadService.uploadChatMedia(req.user.id, req.file);
+      const { conversationId } = req.body;
+      const result = await uploadService.uploadChatMedia(req.user.id, req.file, conversationId);
       res.status(201).json(result);
     } catch (error) {
       next(error);
@@ -196,17 +232,12 @@ router.post('/profile-photos/batch',
       }
 
       const files = req.files as Express.Multer.File[];
-      const uploadPromises = files.map((file, index) =>
-        uploadService.uploadProfilePhoto(req.user!.id, file, index === 0)
-      );
-
-      const results = await Promise.all(uploadPromises);
-      const photos = results.map(result => result.photo);
+      const result = await uploadService.batchUploadProfilePhotos(req.user.id, files);
 
       res.status(201).json({
         success: true,
-        photos,
-        message: `${photos.length} photos uploaded successfully`
+        photos: result.photos,
+        message: `${result.photos.length} photos uploaded successfully`
       });
     } catch (error) {
       next(error);
@@ -236,13 +267,50 @@ router.post('/presigned-url',
         throw new AppError('User not found', 404);
       }
 
-      // This would generate presigned URLs for direct client uploads
-      // Implementation would depend on your cloud storage provider
+      const { fileType, fileName } = req.body;
       
-      res.status(501).json({
-        success: false,
-        message: 'Presigned URL generation not implemented yet'
-      });
+      const result = await uploadService.generatePresignedUrl(
+        req.user.id,
+        fileName,
+        fileType
+      );
+      
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Confirm presigned upload completion
+router.post('/presigned-upload/confirm',
+  authenticate,
+  requireVerified,
+  [
+    body('key')
+      .isLength({ min: 1 })
+      .withMessage('S3 key is required'),
+    body('isPrimary')
+      .optional()
+      .isBoolean()
+      .withMessage('isPrimary must be a boolean')
+  ],
+  validateRequest,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!req.user?.id) {
+        throw new AppError('User not found', 404);
+      }
+
+      const { key, isPrimary = false } = req.body;
+      
+      const result = await uploadService.confirmPresignedUpload(
+        req.user.id,
+        key,
+        isPrimary
+      );
+      
+      res.status(201).json(result);
     } catch (error) {
       next(error);
     }

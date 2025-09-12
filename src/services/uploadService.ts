@@ -5,13 +5,17 @@ import { prisma } from '@/server';
 import { AppError } from '@/utils/AppError';
 import { logger } from '@/utils/logger';
 import { ActivityType } from '@prisma/client';
+import s3Service from './s3Service';
 
-// Configure Cloudinary
+// Configure Cloudinary (fallback)
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
+
+// Storage preference: 's3' or 'cloudinary'
+const STORAGE_PROVIDER = process.env.STORAGE_PROVIDER || 's3';
 
 // Multer configuration for memory storage
 export const upload = multer({
@@ -47,11 +51,44 @@ export class UploadService {
         throw new AppError('Maximum 6 photos allowed', 400);
       }
 
-      // Upload to Cloudinary
-      const uploadResult = await this.uploadToCloudinary(file, 'profile_photos');
+      // Upload to S3 or Cloudinary based on configuration
+      let uploadResult;
+      let url, publicId;
 
-      // If this is set as primary, remove primary flag from other photos
+      if (STORAGE_PROVIDER === 's3') {
+        uploadResult = await s3Service.uploadProfilePhoto(file.buffer, file.originalname, userId);
+        url = uploadResult.cloudFrontUrl;
+        publicId = uploadResult.key;
+      } else {
+        uploadResult = await this.uploadToCloudinary(file, 'profile_photos');
+        url = uploadResult.secure_url;
+        publicId = uploadResult.public_id;
+      }
+
+      // Handle primary photo logic
       if (isPrimary) {
+        // Find existing primary photo to delete from S3
+        const existingPrimaryPhoto = profile.photos.find(photo => photo.isPrimary);
+        
+        if (existingPrimaryPhoto) {
+          console.log('🗑️ Deleting existing primary photo from S3:', existingPrimaryPhoto.publicId);
+          
+          // Delete old primary photo from S3/Cloudinary
+          if (STORAGE_PROVIDER === 's3') {
+            await s3Service.deleteFile(existingPrimaryPhoto.publicId);
+          } else {
+            await cloudinary.uploader.destroy(existingPrimaryPhoto.publicId);
+          }
+          
+          // Delete old primary photo from database
+          await prisma.photo.delete({
+            where: { id: existingPrimaryPhoto.id }
+          });
+          
+          console.log('✅ Old primary photo deleted successfully');
+        }
+        
+        // Remove primary flag from any remaining photos (safety check)
         await prisma.photo.updateMany({
           where: { profileId: profile.id },
           data: { isPrimary: false }
@@ -65,8 +102,8 @@ export class UploadService {
       const photo = await prisma.photo.create({
         data: {
           profileId: profile.id,
-          url: uploadResult.secure_url,
-          publicId: uploadResult.public_id,
+          url,
+          publicId,
           isPrimary,
           order: profile.photos.length + 1
         }
@@ -124,8 +161,12 @@ export class UploadService {
         throw new AppError('Photo not found', 404);
       }
 
-      // Delete from Cloudinary
-      await cloudinary.uploader.destroy(photo.publicId);
+      // Delete from S3 or Cloudinary based on storage provider
+      if (STORAGE_PROVIDER === 's3') {
+        await s3Service.deleteFile(photo.publicId);
+      } else {
+        await cloudinary.uploader.destroy(photo.publicId);
+      }
 
       // Delete from database
       await prisma.photo.delete({
@@ -271,21 +312,34 @@ export class UploadService {
     }
   }
 
-  async uploadChatMedia(userId: string, file: Express.Multer.File) {
+  async uploadChatMedia(userId: string, file: Express.Multer.File, conversationId?: string) {
     try {
-      // Determine folder based on file type
-      const folder = file.mimetype.startsWith('image/') ? 'chat_images' : 'chat_videos';
-      
-      // Upload to Cloudinary
-      const uploadResult = await this.uploadToCloudinary(file, folder);
+      let uploadResult;
+      let url, publicId;
+
+      if (STORAGE_PROVIDER === 's3') {
+        if (file.mimetype.startsWith('image/')) {
+          uploadResult = await s3Service.uploadChatImage(file.buffer, file.originalname, conversationId || 'general');
+        } else {
+          uploadResult = await s3Service.uploadChatVideo(file.buffer, file.originalname, conversationId || 'general');
+        }
+        url = uploadResult.cloudFrontUrl;
+        publicId = uploadResult.key;
+      } else {
+        // Determine folder based on file type
+        const folder = file.mimetype.startsWith('image/') ? 'chat_images' : 'chat_videos';
+        uploadResult = await this.uploadToCloudinary(file, folder);
+        url = uploadResult.secure_url;
+        publicId = uploadResult.public_id;
+      }
 
       logger.info(`Chat media uploaded for user ${userId}`);
 
       return {
         success: true,
         media: {
-          url: uploadResult.secure_url,
-          publicId: uploadResult.public_id,
+          url,
+          publicId,
           mediaType: file.mimetype,
           size: file.size
         }
@@ -396,6 +450,187 @@ export class UploadService {
       }
       logger.error('Error getting upload stats:', error);
       throw new AppError('Failed to get upload stats', 500);
+    }
+  }
+
+  // New methods for S3 functionality
+  async batchUploadProfilePhotos(userId: string, files: Express.Multer.File[]) {
+    try {
+      const profile = await prisma.profile.findUnique({
+        where: { userId },
+        include: { photos: true }
+      });
+
+      if (!profile) {
+        throw new AppError('Profile not found', 404);
+      }
+
+      // Check total photos won't exceed 6
+      if (profile.photos.length + files.length > 6) {
+        throw new AppError(`Maximum 6 photos allowed. You can add ${6 - profile.photos.length} more photos.`, 400);
+      }
+
+      const uploadPromises = files.map(async (file, index) => {
+        let uploadResult;
+        let url, publicId;
+
+        if (STORAGE_PROVIDER === 's3') {
+          uploadResult = await s3Service.uploadProfilePhoto(file.buffer, file.originalname, userId);
+          url = uploadResult.cloudFrontUrl;
+          publicId = uploadResult.key;
+        } else {
+          uploadResult = await this.uploadToCloudinary(file, 'profile_photos');
+          url = uploadResult.secure_url;
+          publicId = uploadResult.public_id;
+        }
+
+        return prisma.photo.create({
+          data: {
+            profileId: profile.id,
+            url,
+            publicId,
+            isPrimary: profile.photos.length === 0 && index === 0, // First photo of first batch is primary
+            order: profile.photos.length + index + 1
+          }
+        });
+      });
+
+      const photos = await Promise.all(uploadPromises);
+
+      // Update profile completeness
+      const updatedCompleteness = this.calculateProfileCompleteness(profile, profile.photos.length + files.length);
+      await prisma.profile.update({
+        where: { id: profile.id },
+        data: { profileCompleteness: updatedCompleteness }
+      });
+
+      // Log activity
+      await prisma.userActivity.create({
+        data: {
+          userId,
+          type: ActivityType.PHOTO_UPLOAD,
+          data: { photoCount: files.length, batchUpload: true }
+        }
+      });
+
+      logger.info(`Batch uploaded ${files.length} photos for user ${userId}`);
+
+      return {
+        success: true,
+        photos: photos.map(photo => ({
+          id: photo.id,
+          url: photo.url,
+          isPrimary: photo.isPrimary,
+          order: photo.order
+        }))
+      };
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      logger.error('Error batch uploading photos:', error);
+      throw new AppError('Failed to upload photos', 500);
+    }
+  }
+
+  async generatePresignedUrl(userId: string, fileName: string, contentType: string) {
+    try {
+      if (STORAGE_PROVIDER !== 's3') {
+        throw new AppError('Presigned URLs only available for S3 storage', 400);
+      }
+
+      const result = await s3Service.generateProfilePhotoPresignedUrl(userId, fileName, contentType);
+
+      logger.info(`Generated presigned URL for user ${userId}`);
+
+      return {
+        success: true,
+        uploadUrl: result.uploadUrl,
+        key: result.key,
+        cloudFrontUrl: result.cloudFrontUrl
+      };
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      logger.error('Error generating presigned URL:', error);
+      throw new AppError('Failed to generate upload URL', 500);
+    }
+  }
+
+  // Method to confirm upload after presigned URL upload
+  async confirmPresignedUpload(userId: string, key: string, isPrimary: boolean = false) {
+    try {
+      const profile = await prisma.profile.findUnique({
+        where: { userId },
+        include: { photos: true }
+      });
+
+      if (!profile) {
+        throw new AppError('Profile not found', 404);
+      }
+
+      if (profile.photos.length >= 6) {
+        throw new AppError('Maximum 6 photos allowed', 400);
+      }
+
+      const cloudFrontUrl = s3Service.getCloudFrontUrl(key);
+
+      // If this is set as primary, remove primary flag from other photos
+      if (isPrimary) {
+        await prisma.photo.updateMany({
+          where: { profileId: profile.id },
+          data: { isPrimary: false }
+        });
+      } else if (profile.photos.length === 0) {
+        // If this is the first photo, make it primary
+        isPrimary = true;
+      }
+
+      // Save photo to database
+      const photo = await prisma.photo.create({
+        data: {
+          profileId: profile.id,
+          url: cloudFrontUrl,
+          publicId: key,
+          isPrimary,
+          order: profile.photos.length + 1
+        }
+      });
+
+      // Update profile completeness
+      const updatedCompleteness = this.calculateProfileCompleteness(profile, profile.photos.length + 1);
+      await prisma.profile.update({
+        where: { id: profile.id },
+        data: { profileCompleteness: updatedCompleteness }
+      });
+
+      // Log activity
+      await prisma.userActivity.create({
+        data: {
+          userId,
+          type: ActivityType.PHOTO_UPLOAD,
+          data: { photoId: photo.id, isPrimary, presignedUpload: true }
+        }
+      });
+
+      logger.info(`Confirmed presigned upload for user ${userId}: ${photo.id}`);
+
+      return {
+        success: true,
+        photo: {
+          id: photo.id,
+          url: photo.url,
+          isPrimary: photo.isPrimary,
+          order: photo.order
+        }
+      };
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      logger.error('Error confirming presigned upload:', error);
+      throw new AppError('Failed to confirm upload', 500);
     }
   }
 }

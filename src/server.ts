@@ -34,8 +34,24 @@ const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:19006'],
-    methods: ['GET', 'POST']
+    origin: (origin, callback) => {
+      const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:19006'];
+      // Allow requests with no origin (like mobile apps)
+      if (!origin) return callback(null, true);
+      
+      // Allow all Expo development URLs and localhost variations
+      if (origin.includes('localhost') || origin.includes('127.0.0.1') || origin.startsWith('exp://') || origin.includes('192.168')) {
+        return callback(null, true);
+      }
+      
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      
+      return callback(null, false);
+    },
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
@@ -58,8 +74,25 @@ const limiter = rateLimit({
 // Middlewares
 app.use(helmet());
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:19006'],
-  credentials: true
+  origin: (origin, callback) => {
+    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:19006'];
+    // Allow requests with no origin (like mobile apps or Postman)
+    if (!origin) return callback(null, true);
+    
+    // Allow all Expo development URLs and localhost variations
+    if (origin.includes('localhost') || origin.includes('127.0.0.1') || origin.startsWith('exp://') || origin.includes('192.168')) {
+      return callback(null, true);
+    }
+    
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    return callback(null, false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 app.use(limiter);
 app.use(express.json({ limit: '10mb' }));
@@ -67,6 +100,17 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Routes
 app.use('/api/auth', authRoutes);
+// Global request logger
+app.use((req, res, next) => {
+  console.log('🌐 SERVER: Incoming request:', req.method, req.url);
+  console.log('🌐 SERVER: Headers:', {
+    'content-type': req.headers['content-type'],
+    'authorization': req.headers.authorization ? 'Bearer [PRESENT]' : 'MISSING',
+    'user-agent': req.headers['user-agent']?.substring(0, 50)
+  });
+  next();
+});
+
 app.use('/api/users', userRoutes);
 app.use('/api/profiles', profileRoutes);
 app.use('/api/matches', matchRoutes);

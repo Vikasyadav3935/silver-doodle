@@ -87,7 +87,19 @@ router.post('/profile',
     body('longitude')
       .optional()
       .isFloat({ min: -180, max: 180 })
-      .withMessage('Valid longitude required')
+      .withMessage('Valid longitude required'),
+    body('city')
+      .optional()
+      .isLength({ max: 100 })
+      .withMessage('City must be less than 100 characters'),
+    body('state')
+      .optional()
+      .isLength({ max: 100 })
+      .withMessage('State must be less than 100 characters'),
+    body('country')
+      .optional()
+      .isLength({ max: 100 })
+      .withMessage('Country must be less than 100 characters')
   ],
   validateRequest,
   async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -154,7 +166,19 @@ router.put('/profile',
     body('longitude')
       .optional()
       .isFloat({ min: -180, max: 180 })
-      .withMessage('Valid longitude required')
+      .withMessage('Valid longitude required'),
+    body('city')
+      .optional()
+      .isLength({ max: 100 })
+      .withMessage('City must be less than 100 characters'),
+    body('state')
+      .optional()
+      .isLength({ max: 100 })
+      .withMessage('State must be less than 100 characters'),
+    body('country')
+      .optional()
+      .isLength({ max: 100 })
+      .withMessage('Country must be less than 100 characters')
   ],
   validateRequest,
   async (req: AuthRequest, res: Response, next: NextFunction) => {
