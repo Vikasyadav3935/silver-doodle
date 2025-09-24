@@ -72,13 +72,7 @@ export class UserService {
         throw new AppError('Profile already exists', 400);
       }
 
-      // Calculate age only if dateOfBirth is provided
-      if (profileData.dateOfBirth) {
-        const age = new Date().getFullYear() - profileData.dateOfBirth.getFullYear();
-        if (age < 18) {
-          throw new AppError('You must be at least 18 years old', 400);
-        }
-      }
+      // Age validation removed - users can be any age
 
       const { interests, email, ...otherData } = profileData;
 
@@ -138,8 +132,8 @@ export class UserService {
       await prisma.matchPreference.create({
         data: {
           profileId: profile.id,
-          minAge: 18,
-          maxAge: 50,
+          minAge: 1,
+          maxAge: 100,
           maxDistance: 50,
           genderPreference: GenderPreference.ALL
         }
@@ -348,6 +342,51 @@ export class UserService {
     } catch (error) {
       logger.error('Error fetching user stats:', error);
       throw new AppError('Failed to fetch user stats', 500);
+    }
+  }
+
+  async getAllUsers(currentUserId: string, limit: number = 20, offset: number = 0) {
+    try {
+      const users = await prisma.user.findMany({
+        where: {
+          id: { not: currentUserId },
+          profile: {
+            isNot: null
+          }
+        },
+        include: {
+          profile: {
+            include: {
+              photos: {
+                where: { isPrimary: true },
+                take: 1
+              }
+            }
+          }
+        },
+        skip: offset,
+        take: limit,
+        orderBy: { createdAt: 'desc' }
+      });
+
+      const formattedUsers = users.map(user => ({
+        id: user.id,
+        profile: {
+          id: user.profile?.id,
+          firstName: user.profile?.firstName,
+          lastName: user.profile?.lastName,
+          photos: user.profile?.photos || []
+        }
+      }));
+
+      return {
+        success: true,
+        users: formattedUsers,
+        total: formattedUsers.length
+      };
+    } catch (error) {
+      logger.error('Error fetching all users:', error);
+      throw new AppError('Failed to fetch users', 500);
     }
   }
 

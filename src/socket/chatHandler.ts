@@ -90,7 +90,7 @@ export const handleChatEvents = (socket: Socket, io: Server) => {
     }
   });
 
-  // Handle sending a message
+  // Handle sending a message via socket (optional - REST API is primary)
   socket.on('send_message', async (data) => {
     try {
       const { conversationId, content, messageType = 'TEXT', mediaUrl, mediaType } = data;
@@ -110,22 +110,18 @@ export const handleChatEvents = (socket: Socket, io: Server) => {
 
       if (result.success) {
         const roomName = `conversation:${conversationId}`;
-        
-        // Emit to all users in conversation room
+
+        // Emit to all users in room, let clients filter
         io.to(roomName).emit('new_message', {
+          message: result.message,
+          conversationId: conversationId,
+          senderId: userId
+        });
+
+        socket.emit('message_sent', {
           message: result.message,
           conversationId: conversationId
         });
-
-        // Send push notification to offline users (would integrate with notification service)
-        const otherUserId = result.message.receiverId;
-        if (!activeUsers.has(otherUserId)) {
-          // User is offline, send push notification
-          io.to(`user:${otherUserId}`).emit('new_message_notification', {
-            message: result.message,
-            conversationId: conversationId
-          });
-        }
 
         logger.info(`Message sent in conversation ${conversationId} by user ${userId}`);
       } else {

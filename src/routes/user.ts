@@ -272,4 +272,24 @@ router.delete('/account', authenticate, async (req: AuthRequest, res: Response, 
   }
 });
 
+// Get all users for testing (excluding current user)
+router.get('/all', authenticate, requireVerified, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user?.id) {
+      throw new AppError('User not found', 404);
+    }
+
+    const { limit = 20, offset = 0 } = req.query;
+    const result = await userService.getAllUsers(
+      req.user.id,
+      Number(limit),
+      Number(offset)
+    );
+
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

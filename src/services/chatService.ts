@@ -225,6 +225,7 @@ export class ChatService {
 
       const formattedMessages = messages.reverse().map(message => ({
         id: message.id,
+        conversationId: message.conversationId,
         content: message.content,
         messageType: message.messageType,
         mediaUrl: message.mediaUrl,
@@ -232,9 +233,13 @@ export class ChatService {
         senderId: message.senderId,
         receiverId: message.receiverId,
         isRead: message.isRead,
+        isEdited: false,
+        replyTo: null,
+        reactions: [],
+        status: message.isRead ? 'READ' : 'delivered',
         readAt: message.readAt ? message.readAt.toISOString() : null,
         createdAt: message.createdAt.toISOString(),
-        editedAt: message.editedAt ? message.editedAt.toISOString() : null,
+        updatedAt: message.editedAt ? message.editedAt.toISOString() : message.createdAt.toISOString(),
         sender: {
           id: message.sender.id,
           firstName: message.sender.profile?.firstName,
@@ -358,6 +363,7 @@ export class ChatService {
 
       const formattedMessage = {
         id: message.id,
+        conversationId: message.conversationId,
         content: message.content,
         messageType: message.messageType,
         mediaUrl: message.mediaUrl,
@@ -365,8 +371,13 @@ export class ChatService {
         senderId: message.senderId,
         receiverId: message.receiverId,
         isRead: message.isRead,
+        isEdited: false,
+        replyTo: null,
+        reactions: [],
+        status: 'sent',
         readAt: message.readAt ? message.readAt.toISOString() : null,
         createdAt: message.createdAt.toISOString(),
+        updatedAt: message.createdAt.toISOString(),
         sender: {
           id: message.sender.id,
           firstName: message.sender.profile?.firstName,
@@ -579,6 +590,113 @@ export class ChatService {
       }
       logger.error('Error searching messages:', error);
       throw new AppError('Failed to search messages', 500);
+    }
+  }
+
+  async createOrGetConversation(user1Id: string, user2Id: string) {
+    try {
+      // Check if conversation already exists between these users
+      let conversation = await prisma.conversation.findFirst({
+        where: {
+          OR: [
+            { user1Id: user1Id, user2Id: user2Id },
+            { user1Id: user2Id, user2Id: user1Id }
+          ]
+        },
+        include: {
+          user1: {
+            include: {
+              profile: {
+                include: {
+                  photos: {
+                    where: { isPrimary: true },
+                    take: 1
+                  }
+                }
+              }
+            }
+          },
+          user2: {
+            include: {
+              profile: {
+                include: {
+                  photos: {
+                    where: { isPrimary: true },
+                    take: 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+
+      // If conversation doesn't exist, create it
+      if (!conversation) {
+        conversation = await prisma.conversation.create({
+          data: {
+            user1Id,
+            user2Id,
+            lastMessageAt: new Date()
+          },
+          include: {
+            user1: {
+              include: {
+                profile: {
+                  include: {
+                    photos: {
+                      where: { isPrimary: true },
+                      take: 1
+                    }
+                  }
+                }
+              }
+            },
+            user2: {
+              include: {
+                profile: {
+                  include: {
+                    photos: {
+                      where: { isPrimary: true },
+                      take: 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        });
+
+        // Log activity for both users
+        await prisma.userActivity.createMany({
+          data: [
+            {
+              userId: user1Id,
+              type: ActivityType.NEW_CONVERSATION,
+              data: { otherUserId: user2Id }
+            },
+            {
+              userId: user2Id,
+              type: ActivityType.NEW_CONVERSATION,
+              data: { otherUserId: user1Id }
+            }
+          ]
+        });
+      }
+
+      return {
+        success: true,
+        conversation: {
+          id: conversation.id,
+          user1: conversation.user1,
+          user2: conversation.user2,
+          createdAt: conversation.createdAt,
+          lastMessageAt: conversation.lastMessageAt
+        }
+      };
+    } catch (error) {
+      logger.error('Error creating/getting conversation:', error);
+      throw new AppError('Failed to create conversation', 500);
     }
   }
 }

@@ -175,12 +175,12 @@ router.put('/:userId/preferences',
     param('userId').isUUID().withMessage('Valid user ID is required'),
     body('minAge')
       .optional()
-      .isInt({ min: 18, max: 100 })
-      .withMessage('Min age must be between 18 and 100'),
+      .isInt({ min: 1, max: 100 })
+      .withMessage('Min age must be between 1 and 100'),
     body('maxAge')
       .optional()
-      .isInt({ min: 18, max: 100 })
-      .withMessage('Max age must be between 18 and 100'),
+      .isInt({ min: 1, max: 100 })
+      .withMessage('Max age must be between 1 and 100'),
     body('maxDistance')
       .optional()
       .isInt({ min: 1, max: 500 })
@@ -272,12 +272,12 @@ router.get('/search/profiles',
       .withMessage('Search query must be between 1 and 100 characters'),
     query('minAge')
       .optional()
-      .isInt({ min: 18, max: 100 })
-      .withMessage('Min age must be between 18 and 100'),
+      .isInt({ min: 1, max: 100 })
+      .withMessage('Min age must be between 1 and 100'),
     query('maxAge')
       .optional()
-      .isInt({ min: 18, max: 100 })
-      .withMessage('Max age must be between 18 and 100'),
+      .isInt({ min: 1, max: 100 })
+      .withMessage('Max age must be between 1 and 100'),
     query('maxDistance')
       .optional()
       .isInt({ min: 1, max: 500 })

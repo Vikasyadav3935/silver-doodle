@@ -165,6 +165,19 @@ router.post('/conversations/:conversationId/messages',
         mediaType
       });
 
+      // Emit socket event for real-time messaging (only to other users)
+      if (result.success && result.message) {
+        const { io } = require('../server');
+        const roomName = `conversation:${conversationId}`;
+
+        // Emit to the room, socket handler will filter out sender
+        io.to(roomName).emit('new_message', {
+          message: result.message,
+          conversationId: conversationId,
+          senderId: req.user.id
+        });
+      }
+
       res.status(201).json(result);
     } catch (error) {
       next(error);
@@ -289,6 +302,36 @@ router.get('/conversations/:conversationId/search',
         Number(limit)
       );
 
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Create or get conversation with a user
+router.post('/conversations',
+  authenticate,
+  requireVerified,
+  [
+    body('userId')
+      .isUUID()
+      .withMessage('Valid user ID is required')
+  ],
+  validateRequest,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!req.user?.id) {
+        throw new AppError('User not found', 404);
+      }
+
+      const { userId } = req.body;
+      
+      if (userId === req.user.id) {
+        throw new AppError('Cannot create conversation with yourself', 400);
+      }
+
+      const result = await chatService.createOrGetConversation(req.user.id, userId);
       res.status(200).json(result);
     } catch (error) {
       next(error);
