@@ -7,6 +7,8 @@ import { SmsService } from './smsService';
 import { logger } from '../utils/logger';
 import { dbService } from '../utils/database';
 import { OtpPurpose } from '@prisma/client';
+import { sessionService } from './sessionService';
+import { AuditLogService, AuditEventType } from './auditLogService';
 
 export class AuthService {
   private smsService: SmsService;
@@ -17,16 +19,21 @@ export class AuthService {
 
   async sendOTP(phoneNumber: string, purpose: OtpPurpose = OtpPurpose.PHONE_VERIFICATION) {
     try {
-      // Check for master phone number - skip SMS service
-      if (phoneNumber === '6387712911') {
-        logger.info(`Master OTP request for ${phoneNumber} - skipping SMS service`);
+      // Development environment bypass only
+      if (process.env.NODE_ENV === 'development' && 
+          process.env.MASTER_PHONE_NUMBER && 
+          phoneNumber === process.env.MASTER_PHONE_NUMBER) {
+        logger.warn(`Development bypass OTP request for ${phoneNumber}`, { 
+          phoneNumber, 
+          environment: process.env.NODE_ENV 
+        });
         return {
           success: true,
           message: 'OTP sent successfully'
         };
       }
 
-      // Send OTP via MeraOTP (they generate and manage the OTP)
+      // Send OTP via MeraOTP for all phone numbers
       await this.smsService.sendOTPSMS(phoneNumber);
       logger.info(`OTP SMS sent successfully to ${phoneNumber} via MeraOTP`);
       
@@ -42,25 +49,27 @@ export class AuthService {
 
   async verifyOTP(phoneNumber: string, code: string, purpose: OtpPurpose = OtpPurpose.PHONE_VERIFICATION) {
     try {
-      logger.info(`Verifying OTP for ${phoneNumber}, code: ${code}, purpose: ${purpose}`);
+      logger.info(`Verifying OTP for ${phoneNumber}, purpose: ${purpose}`);
 
       let isValidOTP = false;
 
-      // Check for master phone number with master OTP
-      if (phoneNumber === '6387712911') {
-        if (code === '1234') {
-          isValidOTP = true;
-          logger.info(`Master OTP validation successful for ${phoneNumber}`);
-        } else {
-          logger.error(`Master OTP validation failed for phone: ${phoneNumber}, code: ${code}`);
-          throw new AppError('Invalid or expired OTP', 400);
-        }
+      // Check for development environment bypass only
+      if (process.env.NODE_ENV === 'development' && 
+          process.env.MASTER_PHONE_NUMBER && 
+          process.env.MASTER_OTP_CODE && 
+          phoneNumber === process.env.MASTER_PHONE_NUMBER && 
+          code === process.env.MASTER_OTP_CODE) {
+        isValidOTP = true;
+        logger.warn(`Development bypass used for ${phoneNumber}`, { 
+          phoneNumber, 
+          environment: process.env.NODE_ENV 
+        });
       } else {
-        // Validate OTP with MeraOTP for regular phone numbers
+        // Validate OTP with MeraOTP for all phone numbers in production
         isValidOTP = await this.smsService.validateOTP(phoneNumber, code);
         
         if (!isValidOTP) {
-          logger.error(`OTP validation failed for phone: ${phoneNumber}, code: ${code}`);
+          logger.error(`OTP validation failed for phone: ${phoneNumber}`);
           throw new AppError('Invalid or expired OTP', 400);
         }
         
@@ -219,16 +228,26 @@ export class AuthService {
     }
   }
 
-  async logout(userId: string) {
+  async logout(userId: string, token?: string, reason?: string) {
     try {
-      // Here you could implement token blacklisting if needed
-      // For now, we'll just log the logout event
-      
+      // Blacklist the current token if provided
+      if (token) {
+        await sessionService.blacklistToken(token, userId, reason || 'User logout');
+      }
+
       await prisma.userActivity.create({
         data: {
           userId,
-          type: 'LOGOUT'
+          type: 'LOGOUT' as any
         }
+      });
+
+      // Log logout event for audit
+      await AuditLogService.getInstance().logEvent({
+        eventType: AuditEventType.LOGOUT,
+        userId,
+        details: { reason },
+        severity: 'LOW'
       });
 
       logger.info(`User logged out: ${userId}`);
@@ -240,6 +259,38 @@ export class AuthService {
     } catch (error) {
       logger.error('Error during logout:', error);
       throw new AppError('Failed to logout', 500);
+    }
+  }
+
+  async logoutAllSessions(userId: string, reason?: string) {
+    try {
+      // Blacklist all user tokens
+      await sessionService.blacklistAllUserTokens(userId, reason || 'All sessions terminated');
+
+      await prisma.userActivity.create({
+        data: {
+          userId,
+          type: 'LOGOUT' as any
+        }
+      });
+
+      // Log security event
+      await AuditLogService.getInstance().logEvent({
+        eventType: AuditEventType.LOGOUT,
+        userId,
+        details: { reason, allSessions: true },
+        severity: 'MEDIUM'
+      });
+
+      logger.info(`All sessions terminated for user: ${userId}`);
+
+      return {
+        success: true,
+        message: 'All sessions terminated successfully'
+      };
+    } catch (error) {
+      logger.error('Error terminating all sessions:', error);
+      throw new AppError('Failed to terminate sessions', 500);
     }
   }
 }

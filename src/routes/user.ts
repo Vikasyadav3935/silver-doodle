@@ -5,9 +5,15 @@ import { authenticate, requireVerified } from '@/middlewares/auth';
 import { AuthRequest } from '@/types';
 import { AppError } from '@/utils/AppError';
 import { Gender } from '@prisma/client';
+import { generalLimiter } from '@/middlewares/rateLimiter';
+import { InputSanitizer } from '@/middlewares/inputSanitization';
 
 const router = Router();
 const userService = new UserService();
+
+// Apply rate limiting and input sanitization
+router.use(generalLimiter);
+router.use(InputSanitizer.userInputSanitizer());
 
 // Validation middleware
 const validateRequest = (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -29,7 +35,7 @@ router.get('/profile', authenticate, requireVerified, async (req: AuthRequest, r
       throw new AppError('User not found', 404);
     }
 
-    const result = await userService.getUserProfile(req.user.id);
+    const result = await userService.getUserProfile(req.user.id, req.user.id, true);
     res.status(200).json(result);
   } catch (error) {
     next(error);
@@ -202,10 +208,10 @@ router.get('/settings', authenticate, requireVerified, async (req: AuthRequest, 
       throw new AppError('User not found', 404);
     }
 
-    const result = await userService.getUserProfile(req.user.id);
+    const result = await userService.getUserProfile(req.user.id, req.user.id, true);
     res.status(200).json({
       success: true,
-      settings: result.user.settings
+      settings: (result.user as any).settings
     });
   } catch (error) {
     next(error);
@@ -265,7 +271,7 @@ router.delete('/account', authenticate, async (req: AuthRequest, res: Response, 
       throw new AppError('User not found', 404);
     }
 
-    const result = await userService.deleteUser(req.user.id);
+    const result = await userService.deleteUser(req.user.id, req.user.id, false);
     res.status(200).json(result);
   } catch (error) {
     next(error);

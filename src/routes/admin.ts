@@ -5,6 +5,10 @@ import { authenticate } from '@/middlewares/auth';
 import { AuthRequest } from '@/types';
 import { AppError } from '@/utils/AppError';
 import { logger } from '@/utils/logger';
+import { loadUserRole, requireAdmin, requireSuperAdmin, Permission } from '@/middlewares/rbac';
+import { adminLimiter } from '@/middlewares/rateLimiter';
+import { InputSanitizer } from '@/middlewares/inputSanitization';
+import { AuditLogService, AuditEventType } from '@/services/auditLogService';
 
 const router = Router();
 
@@ -21,22 +25,24 @@ const validateRequest = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 
-// Admin authentication middleware (simplified - in production, use proper admin roles)
-const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
-  // In production, check if user has admin role
-  // For now, this is just a placeholder
-  if (process.env.NODE_ENV === 'production') {
-    throw new AppError('Admin routes not available in production without proper auth', 403);
-  }
-  next();
-};
+// Apply rate limiting and input sanitization to all admin routes
+router.use(adminLimiter);
+router.use(InputSanitizer.adminInputSanitizer());
+router.use(authenticate);
+router.use(loadUserRole);
 
 // Get platform statistics
 router.get('/stats',
-  authenticate,
   requireAdmin,
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      // Log admin access
+      await AuditLogService.logAdminAction(
+        req.user!.id,
+        'VIEW_PLATFORM_STATS',
+        req
+      );
+
       const [
         totalUsers,
         activeUsers,

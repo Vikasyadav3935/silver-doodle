@@ -3,58 +3,72 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../server';
 import { AppError } from '../utils/AppError';
 import { AuthRequest, JwtPayload } from '../types';
+import { sessionService } from '../services/sessionService';
+import { AuditLogService, AuditEventType } from '../services/auditLogService';
 
 export const authenticate = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  console.log('🔐 AUTH: Authentication middleware called');
-  
   try {
     const authHeader = req.headers.authorization;
-    console.log('🔐 AUTH: Auth header present:', !!authHeader);
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.log('🔐 AUTH: ERROR - No valid auth header');
+      await AuditLogService.logSecurityEvent(
+        AuditEventType.UNAUTHORIZED_ACCESS,
+        req,
+        { reason: 'Missing or invalid authorization header' }
+      );
       throw new AppError('Access token is required', 401);
     }
 
     const token = authHeader.substring(7);
-    console.log('🔐 AUTH: Token extracted, length:', token.length);
 
     if (!process.env.JWT_SECRET) {
-      console.log('🔐 AUTH: ERROR - JWT secret not configured');
       throw new AppError('JWT secret is not configured', 500);
     }
 
-    console.log('🔐 AUTH: Verifying JWT token...');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET) as JwtPayload;
-    console.log('🔐 AUTH: Token verified, user ID:', decoded.userId);
+    // Check if token is blacklisted
+    const isBlacklisted = await sessionService.isTokenBlacklisted(token);
+    if (isBlacklisted) {
+      await AuditLogService.logSecurityEvent(
+        AuditEventType.UNAUTHORIZED_ACCESS,
+        req,
+        { reason: 'Blacklisted token used' }
+      );
+      throw new AppError('Token has been revoked', 401);
+    }
 
-    console.log('🔐 AUTH: Looking up user in database...');
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
+    const decoded = jwt.verify(token, process.env.JWT_SECRET) as JwtPayload;
+
+    const user = await prisma.user.findFirst({
+      where: { 
+        id: decoded.userId,
+        phoneNumber: { not: { startsWith: 'deleted_' } } // Exclude soft-deleted users
+      },
       select: {
         id: true,
         phoneNumber: true,
         isVerified: true,
       }
     });
-
-    console.log('🔐 AUTH: Database query result:', user ? 'User found' : 'User not found');
     
     if (!user) {
-      console.log('🔐 AUTH: ERROR - User not found in database');
+      await AuditLogService.logSecurityEvent(
+        AuditEventType.UNAUTHORIZED_ACCESS,
+        req,
+        { reason: 'User not found or deleted', userId: decoded.userId }
+      );
       throw new AppError('User not found', 404);
     }
 
-    console.log('🔐 AUTH: User authenticated successfully:', user.id);
     req.user = user;
     next();
   } catch (error) {
-    console.log('🔐 AUTH: ERROR in authentication:', error);
-    if (error instanceof jwt.JsonWebTokenError) {
+    if (error instanceof jwt.TokenExpiredError) {
+      next(new AppError('Token has expired', 401));
+    } else if (error instanceof jwt.JsonWebTokenError) {
       next(new AppError('Invalid token', 401));
     } else {
       next(error);

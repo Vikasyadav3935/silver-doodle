@@ -2,33 +2,89 @@ import { prisma } from '@/server';
 import { AppError } from '@/utils/AppError';
 import { logger } from '@/utils/logger';
 import { Gender, GenderPreference, QuestionType, ActivityType } from '@prisma/client';
+import { AuditLogService, AuditEventType } from './auditLogService';
 
 export class UserService {
-  async getUserProfile(userId: string) {
+  async getUserProfile(userId: string, requestingUserId?: string, includePrivateData: boolean = false) {
     try {
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        include: {
-          profile: {
-            include: {
-              photos: {
-                orderBy: { order: 'asc' }
-              },
-              interests: true,
-              preferences: true,
-              answers: {
-                include: {
-                  question: true
-                }
+      // Check if requesting user is accessing their own profile
+      const isOwnProfile = userId === requestingUserId;
+      
+      // Define what data to select based on ownership and privacy settings
+      const selectFields = isOwnProfile || includePrivateData ? {
+        id: true,
+        phoneNumber: true,
+        email: true,
+        isVerified: true,
+        createdAt: true,
+        updatedAt: true,
+        profile: {
+          include: {
+            photos: {
+              orderBy: { order: 'asc' }
+            },
+            interests: true,
+            preferences: true,
+            answers: {
+              include: {
+                question: true
               }
             }
-          },
-          settings: true
+          }
+        },
+        settings: true
+      } : {
+        // Limited data for non-owners
+        id: true,
+        isVerified: true,
+        profile: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            bio: true,
+            occupation: true,
+            education: true,
+            height: true,
+            city: true,
+            country: true,
+            isVerified: true,
+            profileCompleteness: true,
+            photos: {
+              where: { isPrimary: true },
+              take: 3,
+              orderBy: { order: 'asc' }
+            },
+            interests: {
+              select: {
+                id: true,
+                name: true,
+                category: true
+              }
+            }
+          }
         }
+      };
+
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: selectFields
       });
 
       if (!user) {
         throw new AppError('User not found', 404);
+      }
+
+      // Log profile access for audit
+      if (requestingUserId && !isOwnProfile) {
+        await AuditLogService.getInstance().logEvent({
+          eventType: AuditEventType.PROFILE_VIEWED,
+          userId: requestingUserId,
+          targetUserId: userId,
+          resourceType: 'user_profile',
+          resourceId: userId,
+          severity: 'LOW'
+        });
       }
 
       return {
@@ -283,20 +339,79 @@ export class UserService {
     }
   }
 
-  async deleteUser(userId: string) {
+  async deleteUser(userId: string, requestingUserId: string, isAdminAction: boolean = false) {
     try {
-      // Delete user and all related data (cascade will handle most)
-      await prisma.user.delete({
-        where: { id: userId }
+      // Verify resource ownership unless it's an admin action
+      if (!isAdminAction && userId !== requestingUserId) {
+        throw new AppError('Access denied: Can only delete your own account', 403);
+      }
+
+      // Check if user exists
+      const userExists = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, phoneNumber: true }
       });
 
-      logger.info(`User deleted: ${userId}`);
+      if (!userExists) {
+        throw new AppError('User not found', 404);
+      }
+
+      // Log the deletion attempt
+      await AuditLogService.getInstance().logEvent({
+        eventType: AuditEventType.USER_DELETED,
+        userId: requestingUserId,
+        targetUserId: userId !== requestingUserId ? userId : undefined,
+        resourceType: 'user_account',
+        resourceId: userId,
+        details: { 
+          isAdminAction,
+          phoneNumber: userExists.phoneNumber 
+        },
+        severity: 'HIGH'
+      });
+
+      // Perform deletion with transaction for data integrity
+      await prisma.$transaction(async (tx) => {
+        // Soft delete approach - mark as deleted instead of hard delete
+        // This preserves data integrity for audit purposes
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            phoneNumber: `deleted_${Date.now()}_${userExists.phoneNumber}`,
+            email: null,
+            isVerified: false
+          }
+        });
+
+        // Update profile to mark as deleted
+        await tx.profile.updateMany({
+          where: { userId },
+          data: {
+            firstName: 'Deleted User',
+            lastName: null,
+            bio: null,
+            isDiscoverable: false
+          }
+        });
+
+        // Note: In a real scenario, you might want to implement a cleanup job
+        // that runs periodically to permanently delete data after retention period
+      });
+
+      logger.info(`User deleted: ${userId} by ${requestingUserId}`, {
+        deletedUserId: userId,
+        requestingUserId,
+        isAdminAction
+      });
 
       return {
         success: true,
-        message: 'User deleted successfully'
+        message: 'User account deleted successfully'
       };
     } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
       logger.error('Error deleting user:', error);
       throw new AppError('Failed to delete user', 500);
     }
@@ -347,42 +462,97 @@ export class UserService {
 
   async getAllUsers(currentUserId: string, limit: number = 20, offset: number = 0) {
     try {
+      // Limit the maximum number of users that can be fetched at once
+      const maxLimit = 50;
+      const safeLimit = Math.min(limit, maxLimit);
+
       const users = await prisma.user.findMany({
         where: {
           id: { not: currentUserId },
           profile: {
-            isNot: null
-          }
+            isNot: null,
+            is: {
+              isDiscoverable: true // Only show discoverable profiles
+            }
+          },
+          phoneNumber: { not: { startsWith: 'deleted_' } } // Exclude soft-deleted users
         },
-        include: {
+        select: {
+          id: true,
+          isVerified: true,
           profile: {
-            include: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              bio: true,
+              dateOfBirth: true, // We'll calculate age from this
+              city: true,
+              profileCompleteness: true,
               photos: {
                 where: { isPrimary: true },
-                take: 1
+                take: 1,
+                select: {
+                  id: true,
+                  url: true,
+                  isPrimary: true
+                }
               }
             }
           }
         },
         skip: offset,
-        take: limit,
+        take: safeLimit,
         orderBy: { createdAt: 'desc' }
       });
 
-      const formattedUsers = users.map(user => ({
-        id: user.id,
-        profile: {
-          id: user.profile?.id,
-          firstName: user.profile?.firstName,
-          lastName: user.profile?.lastName,
-          photos: user.profile?.photos || []
+      const formattedUsers = users.map(user => {
+        // Calculate age from dateOfBirth
+        let age: number | null = null;
+        if (user.profile?.dateOfBirth) {
+          const today = new Date();
+          const birthDate = new Date(user.profile.dateOfBirth);
+          age = today.getFullYear() - birthDate.getFullYear();
+          const monthDiff = today.getMonth() - birthDate.getMonth();
+          if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+            age--;
+          }
         }
-      }));
+
+        return {
+          id: user.id,
+          isVerified: user.isVerified,
+          profile: user.profile ? {
+            id: user.profile.id,
+            firstName: user.profile.firstName,
+            lastName: user.profile.lastName,
+            bio: user.profile.bio?.substring(0, 100) + (user.profile.bio && user.profile.bio.length > 100 ? '...' : ''), // Truncate bio
+            age, // Show calculated age instead of birth date
+            city: user.profile.city,
+            profileCompleteness: user.profile.profileCompleteness,
+            photos: user.profile.photos || []
+          } : null
+        };
+      }).filter(user => user.profile !== null); // Remove users without profiles
+
+      // Log bulk data access for audit
+      await AuditLogService.getInstance().logEvent({
+        eventType: AuditEventType.BULK_DATA_ACCESS,
+        userId: currentUserId,
+        resourceType: 'user_profiles',
+        details: { 
+          recordCount: formattedUsers.length,
+          limit: safeLimit,
+          offset 
+        },
+        severity: 'MEDIUM'
+      });
 
       return {
         success: true,
         users: formattedUsers,
-        total: formattedUsers.length
+        total: formattedUsers.length,
+        hasMore: formattedUsers.length === safeLimit
       };
     } catch (error) {
       logger.error('Error fetching all users:', error);
