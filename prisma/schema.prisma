@@ -44,38 +44,55 @@ model User {
   user_roles_user_roles_granted_byTousers     user_roles[]         @relation("user_roles_granted_byTousers")
   user_roles_user_roles_user_idTousers        user_roles[]         @relation("user_roles_user_idTousers")
   settings                                    UserSettings?
+  compatibilityScores1                        CompatibilityScore[] @relation("CompatibilityUser1")
+  compatibilityScores2                        CompatibilityScore[] @relation("CompatibilityUser2")
 
   @@map("users")
 }
 
 model Profile {
-  id                  String           @id @default(uuid())
-  userId              String           @unique
-  firstName           String
-  lastName            String?
-  dateOfBirth         DateTime?
-  gender              Gender?
-  bio                 String?
-  occupation          String?
-  company             String?
-  education           String?
-  height              Int?
-  latitude            Float?
-  longitude           Float?
-  city                String?
-  state               String?
-  country             String?
-  isVerified          Boolean          @default(false)
-  isDiscoverable      Boolean          @default(true)
-  showOnlineStatus    Boolean          @default(false)
-  profileCompleteness Int              @default(0)
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
-  preferences         MatchPreference?
-  photos              Photo[]
-  user                User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  answers             QuestionAnswer[]
-  interests           Interest[]       @relation("InterestToProfile")
+  id                        String               @id @default(uuid())
+  userId                    String               @unique
+  firstName                 String
+  lastName                  String?
+  dateOfBirth               DateTime?
+  gender                    Gender?
+  bio                       String?
+  occupation                String?
+  company                   String?
+  education                 String?
+  height                    Int?
+  latitude                  Float?
+  longitude                 Float?
+  city                      String?
+  state                     String?
+  country                   String?
+  isVerified                Boolean              @default(false)
+  isDiscoverable            Boolean              @default(true)
+  showOnlineStatus          Boolean              @default(false)
+  profileCompleteness       Int                  @default(0)
+  extroversion              Decimal?             @db.Decimal(3, 2)
+  openness                  Decimal?             @db.Decimal(3, 2)
+  conscientiousness         Decimal?             @db.Decimal(3, 2)
+  agreeableness             Decimal?             @db.Decimal(3, 2)
+  emotional_stability       Decimal?             @db.Decimal(3, 2)
+  growth_mindset            Decimal?             @db.Decimal(3, 2)
+  collectivism              Decimal?             @db.Decimal(3, 2)
+  spiritual_inclination     Decimal?             @db.Decimal(3, 2)
+  veganism_support          Decimal?             @db.Decimal(3, 2)
+  environmental_consciousness Decimal?           @db.Decimal(3, 2)
+  health_focus              Decimal?             @db.Decimal(3, 2)
+  social_justice            Decimal?             @db.Decimal(3, 2)
+  personality_quiz_completed Boolean             @default(false)
+  personality_quiz_completed_at DateTime?
+  createdAt                 DateTime             @default(now())
+  updatedAt                 DateTime             @updatedAt
+  preferences               MatchPreference?
+  photos                    Photo[]
+  user                      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers                   QuestionAnswer[]
+  personalityAnswers        PersonalityAnswer[]
+  interests                 Interest[]           @relation("InterestToProfile")
 
   @@map("profiles")
 }
@@ -534,4 +551,50 @@ enum ActivityType {
   REPORT_USER
   PROFILE_VIEW
   NEW_CONVERSATION
+}
+
+model PersonalityQuestion {
+  id              String              @id @default(uuid())
+  questionNumber  Int                 @map("question_number")
+  category        String
+  questionText    String              @map("question_text")
+  options         Json
+  scoringWeights  Json                @map("scoring_weights")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  answers         PersonalityAnswer[]
+
+  @@map("personality_questions")
+}
+
+model PersonalityAnswer {
+  id             String             @id @default(uuid())
+  profileId      String             @map("profile_id")
+  questionId     String             @map("question_id")
+  selectedOption String             @map("selected_option")
+  optionIndex    Int                @map("option_index")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+  profile        Profile            @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  question       PersonalityQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, questionId])
+  @@map("personality_answers")
+}
+
+model CompatibilityScore {
+  id               String   @id @default(uuid())
+  user1Id          String   @map("user1_id")
+  user2Id          String   @map("user2_id")
+  overallScore     Decimal  @map("overall_score") @db.Decimal(5, 2)
+  personalityScore Decimal  @map("personality_score") @db.Decimal(5, 2)
+  lifestyleScore   Decimal  @map("lifestyle_score") @db.Decimal(5, 2)
+  traitScores      Json     @map("trait_scores")
+  calculatedAt     DateTime @default(now()) @map("calculated_at")
+  expiresAt        DateTime @map("expires_at")
+  user1            User     @relation("CompatibilityUser1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2            User     @relation("CompatibilityUser2", fields: [user2Id], references: [id], onDelete: Cascade)
+
+  @@unique([user1Id, user2Id])
+  @@map("compatibility_scores")
 }

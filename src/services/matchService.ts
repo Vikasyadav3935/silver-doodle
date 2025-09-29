@@ -2,6 +2,7 @@ import { prisma } from '@/server';
 import { AppError } from '@/utils/AppError';
 import { logger } from '@/utils/logger';
 import { ActivityType, Gender, GenderPreference } from '@prisma/client';
+import { PersonalityService } from './personalityService';
 
 interface DiscoveryFilters {
   minAge?: number;
@@ -11,6 +12,11 @@ interface DiscoveryFilters {
 }
 
 export class MatchService {
+  private personalityService: PersonalityService;
+
+  constructor() {
+    this.personalityService = new PersonalityService();
+  }
   async getDiscoveryProfiles(userId: string, limit: number = 10, filters?: DiscoveryFilters) {
     try {
       // Get current user's profile and preferences
@@ -116,7 +122,25 @@ export class MatchService {
       // Calculate compatibility scores and filter by distance
       const profilesWithScores = await Promise.all(
         potentialMatches.map(async (profile) => {
-          const compatibility = await this.calculateCompatibility(currentUser, profile);
+          let compatibility = 50; // Default compatibility score
+          
+          // Try to get personality-based compatibility score
+          try {
+            const personalityCompatibility = await this.personalityService.calculateCompatibility(
+              currentUser.userId, 
+              profile.userId
+            );
+            if (personalityCompatibility.success && personalityCompatibility.compatibilityScore) {
+              compatibility = personalityCompatibility.compatibilityScore.overallScore;
+            } else {
+              // Fallback to basic compatibility if personality scores aren't available
+              compatibility = await this.calculateBasicCompatibility(currentUser, profile);
+            }
+          } catch (error) {
+            // Fallback to basic compatibility if personality calculation fails
+            compatibility = await this.calculateBasicCompatibility(currentUser, profile);
+          }
+          
           let distance: number | null = null;
 
           // Calculate distance if both profiles have location
@@ -553,7 +577,7 @@ export class MatchService {
     }
   }
 
-  private async calculateCompatibility(user1: Record<string, any>, user2: Record<string, any>): Promise<number> {
+  private async calculateBasicCompatibility(user1: Record<string, any>, user2: Record<string, any>): Promise<number> {
     let score = 0;
     const factors = [];
 

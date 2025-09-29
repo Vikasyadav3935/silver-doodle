@@ -23,6 +23,7 @@ import uploadRoutes from './routes/upload';
 import paymentRoutes from './routes/payment';
 import notificationRoutes from './routes/notification';
 import adminRoutes from './routes/admin';
+import personalityRoutes from './routes/personality';
 
 // Socket handlers
 import { handleChatEvents } from './socket/chatHandler';
@@ -119,6 +120,7 @@ app.use('/api/uploads', uploadRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/personality', personalityRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {
